@@ -24,72 +24,60 @@ let cart = JSON.parse(localStorage.getItem("twt_cart") || "[]");
 document.addEventListener("DOMContentLoaded", () => {
   renderProducts();
   updateCartUI();
-  handleReorderLink(); // NEW: checks if user came from a reminder email
+  handleReorderLink();
 });
 
 
 // ══════════════════════════════════════════════
-// NEW: REORDER PRE-FILL SYSTEM
-// When Rehman clicks the link in his reminder email,
-// this function runs automatically and:
-//   1. Adds his product back to the cart
-//   2. Opens checkout directly
-//   3. Fills every form field with his saved details
-//   4. Shows a welcome-back banner
-//   5. Captures UTM data so Google Sheet knows it was a reorder
+// REORDER PRE-FILL SYSTEM
+// BUG FIX: Parse params carefully to avoid
+// name bleeding into phone field
 // ══════════════════════════════════════════════
 function handleReorderLink() {
   const params = new URLSearchParams(window.location.search);
 
-  // Only activate if the link came from a reminder email
-  // utm_source=email is added by your Apps Script automatically
   if (params.get("utm_source") !== "email") return;
 
-  const name    = params.get("name")    || "";
-  const email   = params.get("email")   || "";
-  const phone   = params.get("phone")   || "";
-  const city    = params.get("city")    || "";
-  const address = params.get("address") || "";
-  const product = params.get("product") || "";
+  // FIX: Each param is parsed individually from URLSearchParams
+  // so there's no bleeding between name and phone
+  const name    = decodeURIComponent(params.get("name")    || "");
+  const email   = decodeURIComponent(params.get("email")   || "");
+  const phone   = decodeURIComponent(params.get("phone")   || "");
+  const city    = decodeURIComponent(params.get("city")    || "");
+  const address = decodeURIComponent(params.get("address") || "");
+  const product = decodeURIComponent(params.get("product") || "");
 
-  // STEP 1: Find the matching product and add it to cart
-  // Matches even if URL product name is slightly different from PRODUCTS array
+  // STEP 1: Find matching product and add to cart
   if (product) {
     const match = PRODUCTS.find(p =>
       p.name.toLowerCase().includes(product.toLowerCase()) ||
       product.toLowerCase().includes(p.name.toLowerCase())
     );
     if (match) {
-      cart = []; // clear cart so reorder starts fresh
+      cart = [];
       cart.push({ ...match, qty: 1 });
       saveCart();
       updateCartUI();
     }
   }
 
-  // STEP 2: Show checkout section directly (no need to open cart drawer first)
+  // STEP 2: Show checkout directly
   document.getElementById("checkoutSection").style.display = "block";
   renderCheckoutSummary();
 
-  // STEP 3: Fill all form fields with customer's saved details from URL
+  // STEP 3: Fill form fields
   document.getElementById("custName").value    = name;
   document.getElementById("custEmail").value   = email;
   document.getElementById("custPhone").value   = phone;
   document.getElementById("custCity").value    = city;
   document.getElementById("custAddress").value = address;
 
-  // STEP 4: Store UTM values in hidden fields so they go to Google Sheet
-  // These fields are invisible to the customer but submitted with the order
-  const utmSource   = params.get("utm_source")   || "organic";
-  const utmMedium   = params.get("utm_medium")   || "";
-  const utmCampaign = params.get("utm_campaign") || "reorder_reminder";
+  // STEP 4: Store UTM values
+  window._utmSource   = params.get("utm_source")   || "organic";
+  window._utmMedium   = params.get("utm_medium")   || "";
+  window._utmCampaign = params.get("utm_campaign") || "reorder_reminder";
 
-  // Store in window so placeOrder() can read them
-  window._utmSource   = utmSource;
-  window._utmMedium   = utmMedium;
-  window._utmCampaign = utmCampaign;
-
-  // STEP 5: Show a friendly welcome-back banner at the top
+  // STEP 5: Show welcome-back banner
   if (name) {
     const firstName = name.split(" ")[0];
     const banner = document.createElement("div");
@@ -110,7 +98,7 @@ function handleReorderLink() {
     document.getElementById("checkoutSection").prepend(banner);
   }
 
-  // STEP 6: Scroll smoothly to checkout
+  // STEP 6: Scroll to checkout
   setTimeout(() => {
     document.getElementById("checkoutSection").scrollIntoView({ behavior: "smooth" });
   }, 150);
@@ -391,6 +379,7 @@ async function sendConfirmationEmail(name, email, phone, city, address) {
 }
 
 // ── ORDER SUBMISSION ──────────────────────────
+// FIX: Added retry logic for Railway cold starts
 async function placeOrder(e) {
   e.preventDefault();
   if (!validate()) return;
@@ -413,8 +402,6 @@ async function placeOrder(e) {
   btn.disabled = true;
   errBox.style.display = "none";
 
-  // NEW: Read UTM values set by handleReorderLink()
-  // If customer came organically (not from email), these will be "organic"
   const utm_source   = window._utmSource   || "organic";
   const utm_medium   = window._utmMedium   || "";
   const utm_campaign = window._utmCampaign || "";
@@ -428,17 +415,29 @@ async function placeOrder(e) {
     product_name: item.name,
     order_value:  item.price * item.qty,
     quantity:     item.qty,
-    utm_source,   // NEW: "email" if reorder, "organic" if direct
-    utm_medium,   // NEW: "reminder" if reorder
-    utm_campaign, // NEW: "reorder_reminder" if reorder
+    utm_source,
+    utm_medium,
+    utm_campaign,
   }));
 
+  // ── RETRY LOGIC (fixes Railway cold start timeouts) ──
   try {
-    const res = await fetch(`${API_BASE}/order`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orders }),
-    });
+    let res;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        btn.textContent = attempt === 1 ? "Placing order..." : `Retrying... (${attempt}/3)`;
+        res = await fetch(`${API_BASE}/order`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orders }),
+        });
+        if (res.ok) break; // success — stop retrying
+      } catch (fetchErr) {
+        if (attempt === 3) throw fetchErr; // all 3 failed — give up
+        await new Promise(r => setTimeout(r, 1500 * attempt)); // wait 1.5s, 3s
+      }
+    }
+
     const data = await res.json();
 
     if (res.ok && data.success) {
@@ -449,7 +448,6 @@ async function placeOrder(e) {
       saveCart();
       updateCartUI();
 
-      // Reset UTM state after successful order
       window._utmSource   = null;
       window._utmMedium   = null;
       window._utmCampaign = null;
@@ -475,7 +473,6 @@ function resetAll() {
   document.getElementById("checkoutForm").reset();
   document.body.style.overflow = "";
 
-  // Remove reorder banner if it exists
   const banner = document.getElementById("reorderBanner");
   if (banner) banner.remove();
 
