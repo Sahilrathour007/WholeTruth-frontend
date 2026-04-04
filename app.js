@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────
 
 // ── CONFIG ──────────────────────────────────
-const API_BASE = "https://wholetruth.onrender.com/";
+const API_BASE = "https://wholetruth.onrender.com";
 const ORDER_DEDUP_KEY = "twt_placed_orders";
 
 // ── EMAILJS CONFIG ───────────────────────────
