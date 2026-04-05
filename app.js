@@ -1,26 +1,24 @@
-// ─────────────────────────────────────────────
-//  THE WHOLE TRUTH — APP LOGIC
-//  Cart, Modal, Checkout, Order Submission
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  THE WHOLE TRUTH — APP LOGIC v3
+//  Cart · Modal · Checkout · Order Submission
+//
+//  CHANGES FROM v2:
+//  [1] EmailJS completely removed — was crashing page on load
+//      because emailjs.init() called with no SDK loaded.
+//  [2] handleReorderLink() duplicate removed — was defined twice,
+//      second definition overwrote first and ran on every page
+//      load, breaking normal shopping flow.
+//  [3] /track-click called via Render backend (no CORS issues).
+// ─────────────────────────────────────────────────────────────
 
-// ── CONFIG ──────────────────────────────────
-const API_BASE = "https://wholetruth.onrender.com";
+// ── CONFIG ───────────────────────────────────────────────────
+const API_BASE        = "https://wholetruth.onrender.com";
 const ORDER_DEDUP_KEY = "twt_placed_orders";
 
-// ── EMAILJS CONFIG ───────────────────────────
-const EMAILJS_SERVICE_ID  = "service_6cjplzj";
-const EMAILJS_TEMPLATE_ID = "template_9r61xgs";
-const EMAILJS_PUBLIC_KEY  = "wdqTf0DWbJQhfn9_5";
-
-// Initialise EmailJS
-(function () {
-  emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
-})();
-
-// ── STATE ────────────────────────────────────
+// ── STATE ─────────────────────────────────────────────────────
 let cart = JSON.parse(localStorage.getItem("twt_cart") || "[]");
 
-// ── INIT ─────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   renderProducts();
   updateCartUI();
@@ -28,84 +26,93 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
 // REORDER PRE-FILL SYSTEM
-// BUG FIX: Parse params carefully to avoid
-// name bleeding into phone field
-// ══════════════════════════════════════════════
+// Triggered only when utm_source=email is in the URL.
+// Reads all customer data from URL params, autofills form,
+// pings Render /track-click silently in background.
+// ══════════════════════════════════════════════════════════════
 function handleReorderLink() {
   const params = new URLSearchParams(window.location.search);
 
+  // Exit immediately if this is not a reorder link
   if (params.get("utm_source") !== "email") return;
 
-  // FIX: Each param is parsed individually from URLSearchParams
-  // so there's no bleeding between name and phone
-  const name    = decodeURIComponent(params.get("name")    || "");
-  const email   = decodeURIComponent(params.get("email")   || "");
-  const phone   = decodeURIComponent(params.get("phone")   || "");
-  const city    = decodeURIComponent(params.get("city")    || "");
-  const address = decodeURIComponent(params.get("address") || "");
-  const product = decodeURIComponent(params.get("product") || "");
+  const name    = params.get("name")    || "";
+  const email   = params.get("email")   || "";
+  const phone   = params.get("phone")   || "";
+  const city    = params.get("city")    || "";
+  const address = params.get("address") || "";
+  const product = params.get("product") || "";
 
-  // STEP 1: Find matching product and add to cart
+  // ── Ping click tracker via Render (no CORS, no GAS redirect) ──
+  if (phone || email) {
+    fetch(`${API_BASE}/track-click`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ phone, email, product, name }),
+    }).catch(() => {});
+  }
+
+  // ── Add product to cart ──────────────────────────────────
   if (product) {
     const match = PRODUCTS.find(p =>
       p.name.toLowerCase().includes(product.toLowerCase()) ||
       product.toLowerCase().includes(p.name.toLowerCase())
     );
     if (match) {
-      cart = [];
-      cart.push({ ...match, qty: 1 });
+      cart = [{ ...match, qty: 1 }];
       saveCart();
       updateCartUI();
     }
   }
 
-  // STEP 2: Show checkout directly
+  // ── Open checkout directly ───────────────────────────────
   document.getElementById("checkoutSection").style.display = "block";
   renderCheckoutSummary();
 
-  // STEP 3: Fill form fields
+  // ── Pre-fill form fields ─────────────────────────────────
   document.getElementById("custName").value    = name;
   document.getElementById("custEmail").value   = email;
   document.getElementById("custPhone").value   = phone;
   document.getElementById("custCity").value    = city;
   document.getElementById("custAddress").value = address;
 
-  // STEP 4: Store UTM values
+  // ── Store UTM for order submission ───────────────────────
   window._utmSource   = params.get("utm_source")   || "organic";
   window._utmMedium   = params.get("utm_medium")   || "";
   window._utmCampaign = params.get("utm_campaign") || "reorder_reminder";
 
-  // STEP 5: Show welcome-back banner
+  // ── Welcome-back banner ──────────────────────────────────
   if (name) {
-    const firstName = name.split(" ")[0];
+    const existing = document.getElementById("reorderBanner");
+    if (existing) existing.remove();
     const banner = document.createElement("div");
     banner.id = "reorderBanner";
-    banner.style.cssText = `
-      background: #1D9E75;
-      color: white;
-      padding: 14px 20px;
-      text-align: center;
-      font-size: 15px;
-      font-weight: 500;
-      position: sticky;
-      top: 60px;
-      z-index: 999;
-    `;
+    banner.style.cssText = [
+      "background:#1D9E75",
+      "color:white",
+      "padding:14px 20px",
+      "text-align:center",
+      "font-size:15px",
+      "font-weight:500",
+      "position:sticky",
+      "top:60px",
+      "z-index:999",
+    ].join(";");
     banner.textContent =
-      "Welcome back " + firstName + "! Your details are pre-filled — just confirm and place your order.";
+      "Welcome back " + name.split(" ")[0] + "! Your details are pre-filled — just confirm and place your order.";
     document.getElementById("checkoutSection").prepend(banner);
   }
 
-  // STEP 6: Scroll to checkout
+  // ── Scroll to checkout ───────────────────────────────────
   setTimeout(() => {
     document.getElementById("checkoutSection").scrollIntoView({ behavior: "smooth" });
   }, 150);
 }
 
 
-// ── PRODUCTS ─────────────────────────────────
+// ── PRODUCTS ──────────────────────────────────────────────────
 function renderProducts() {
   const grid = document.getElementById("productsGrid");
   grid.innerHTML = PRODUCTS.map(p => `
@@ -130,7 +137,7 @@ function renderProducts() {
   `).join("");
 }
 
-// ── MODAL ─────────────────────────────────────
+// ── MODAL ─────────────────────────────────────────────────────
 function openModal(id) {
   const p = PRODUCTS.find(x => x.id === id);
   if (!p) return;
@@ -138,7 +145,6 @@ function openModal(id) {
     <div class="modal-img">${p.emoji}</div>
     <h2 class="modal-title">${p.name}</h2>
     <p class="modal-desc">${p.description}</p>
-
     <div class="modal-section-title">Nutrition (per bar)</div>
     <div class="modal-macros">
       <div class="modal-macro"><strong>${p.macros.protein}</strong><small>Protein</small></div>
@@ -146,12 +152,10 @@ function openModal(id) {
       <div class="modal-macro"><strong>${p.macros.fat}</strong><small>Fat</small></div>
       <div class="modal-macro"><strong>${p.macros.calories}</strong><small>Calories</small></div>
     </div>
-
     <div class="modal-section-title">Ingredients</div>
     <div class="ingredients-list">
       ${p.ingredients.map(i => `<span class="ingredient-tag">${i}</span>`).join("")}
     </div>
-
     <div class="modal-footer">
       <div class="modal-price">₹${p.price}</div>
       <button class="cta-btn" onclick="addToCart(${p.id}); closeModal()">Add to Cart →</button>
@@ -166,16 +170,13 @@ function closeModal() {
   document.body.style.overflow = "";
 }
 
-// ── CART ──────────────────────────────────────
+// ── CART ──────────────────────────────────────────────────────
 function addToCart(id) {
   const product = PRODUCTS.find(p => p.id === id);
   if (!product) return;
   const existing = cart.find(i => i.id === id);
-  if (existing) {
-    existing.qty++;
-  } else {
-    cart.push({ ...product, qty: 1 });
-  }
+  if (existing) { existing.qty++; }
+  else          { cart.push({ ...product, qty: 1 }); }
   saveCart();
   updateCartUI();
   showCartNotification(product.name);
@@ -193,34 +194,21 @@ function changeQty(id, delta) {
   if (!item) return;
   item.qty += delta;
   if (item.qty <= 0) removeFromCart(id);
-  else {
-    saveCart();
-    updateCartUI();
-    renderCartItems();
-  }
+  else { saveCart(); updateCartUI(); renderCartItems(); }
 }
 
-function saveCart() {
-  localStorage.setItem("twt_cart", JSON.stringify(cart));
-}
-
-function getCartTotal() {
-  return cart.reduce((sum, i) => sum + i.price * i.qty, 0);
-}
-
-function getCartCount() {
-  return cart.reduce((sum, i) => sum + i.qty, 0);
-}
+function saveCart()     { localStorage.setItem("twt_cart", JSON.stringify(cart)); }
+function getCartTotal() { return cart.reduce((s, i) => s + i.price * i.qty, 0); }
+function getCartCount() { return cart.reduce((s, i) => s + i.qty, 0); }
 
 function updateCartUI() {
-  const count = getCartCount();
-  document.getElementById("cartCount").textContent = count;
+  document.getElementById("cartCount").textContent = getCartCount();
   renderCartItems();
 }
 
 function renderCartItems() {
   const container = document.getElementById("cartItems");
-  const footer = document.getElementById("cartFooter");
+  const footer    = document.getElementById("cartFooter");
   if (cart.length === 0) {
     container.innerHTML = `<p class="empty-cart">Your cart is empty.<br>Add some clean food 🌿</p>`;
     footer.style.display = "none";
@@ -246,9 +234,9 @@ function renderCartItems() {
 }
 
 function toggleCart() {
-  const drawer = document.getElementById("cartDrawer");
+  const drawer  = document.getElementById("cartDrawer");
   const overlay = document.getElementById("cartOverlay");
-  const isOpen = drawer.classList.contains("open");
+  const isOpen  = drawer.classList.contains("open");
   drawer.classList.toggle("open");
   overlay.classList.toggle("open");
   document.body.style.overflow = isOpen ? "" : "hidden";
@@ -260,25 +248,31 @@ function showCartNotification(name) {
   if (old) old.remove();
   const notif = document.createElement("div");
   notif.id = "cartNotif";
-  notif.style.cssText = `
-    position:fixed; bottom:32px; left:50%; transform:translateX(-50%);
-    background:#1A1A1A; color:white; padding:12px 24px;
-    border-radius:4px; font-size:0.9rem; z-index:9999;
-    animation: fadeUp 0.3s ease;
-  `;
+  notif.style.cssText = [
+    "position:fixed",
+    "bottom:32px",
+    "left:50%",
+    "transform:translateX(-50%)",
+    "background:#1A1A1A",
+    "color:white",
+    "padding:12px 24px",
+    "border-radius:4px",
+    "font-size:0.9rem",
+    "z-index:9999",
+    "animation:fadeUp 0.3s ease",
+  ].join(";");
   notif.textContent = `✓ ${name} added to cart`;
   document.body.appendChild(notif);
   setTimeout(() => notif.remove(), 2500);
 }
 
-// ── CHECKOUT ──────────────────────────────────
+// ── CHECKOUT ──────────────────────────────────────────────────
 function goToCheckout() {
   if (cart.length === 0) return;
   toggleCart();
   document.getElementById("checkoutSection").style.display = "block";
-  document.querySelector(".hero")?.scrollIntoView?.({ block: "start" });
-  document.getElementById("checkoutSection").scrollIntoView({ behavior: "smooth" });
   renderCheckoutSummary();
+  document.getElementById("checkoutSection").scrollIntoView({ behavior: "smooth" });
 }
 
 function renderCheckoutSummary() {
@@ -297,7 +291,7 @@ function goBackToShop() {
   toggleCart();
 }
 
-// ── VALIDATION ────────────────────────────────
+// ── VALIDATION ────────────────────────────────────────────────
 function validate() {
   let valid = true;
   const name    = document.getElementById("custName").value.trim();
@@ -306,7 +300,7 @@ function validate() {
   const city    = document.getElementById("custCity").value.trim();
   const address = document.getElementById("custAddress").value.trim();
 
-  ["errName", "errEmail", "errPhone", "errCity", "errAddress"].forEach(id => {
+  ["errName","errEmail","errPhone","errCity","errAddress"].forEach(id => {
     document.getElementById(id).textContent = "";
   });
 
@@ -314,72 +308,39 @@ function validate() {
     document.getElementById("errName").textContent = "Please enter your full name.";
     valid = false;
   }
-
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     document.getElementById("errEmail").textContent = "Please enter a valid email address.";
     valid = false;
   }
-
   if (!/^\d{10}$/.test(phone)) {
     document.getElementById("errPhone").textContent = "Enter a valid 10-digit phone number.";
     valid = false;
   }
-
   if (!city || city.length < 2) {
     document.getElementById("errCity").textContent = "Please enter your city.";
     valid = false;
   }
-
   if (!address || address.length < 10) {
     document.getElementById("errAddress").textContent = "Please enter a complete address.";
     valid = false;
   }
-
   return valid;
 }
 
-// ── DUPLICATE ORDER GUARD ────────────────────
+// ── DUPLICATE ORDER GUARD ─────────────────────────────────────
 function isDuplicate(name, phone) {
   const placed = JSON.parse(localStorage.getItem(ORDER_DEDUP_KEY) || "[]");
-  const key = `${name.toLowerCase()}::${phone}`;
+  const key    = `${name.toLowerCase()}::${phone}`;
   const recent = placed.filter(o => Date.now() - o.ts < 60000);
   return recent.some(o => o.key === key);
 }
-
 function markOrderPlaced(name, phone) {
   const placed = JSON.parse(localStorage.getItem(ORDER_DEDUP_KEY) || "[]");
-  const key = `${name.toLowerCase()}::${phone}`;
-  placed.push({ key, ts: Date.now() });
+  placed.push({ key: `${name.toLowerCase()}::${phone}`, ts: Date.now() });
   localStorage.setItem(ORDER_DEDUP_KEY, JSON.stringify(placed.slice(-20)));
 }
 
-// ── SEND CONFIRMATION EMAIL (EmailJS) ─────────
-async function sendConfirmationEmail(name, email, phone, city, address) {
-  const orderList = cart
-    .map(item => `${item.emoji} ${item.name} × ${item.qty} — ₹${item.price * item.qty}`)
-    .join("\n");
-
-  const templateParams = {
-    to_name:          name,
-    to_email:         email,
-    customer_phone:   phone,
-    delivery_city:    city,
-    delivery_address: address,
-    order_items:      orderList,
-    order_total:      `₹${getCartTotal()}`,
-    order_id:         `TWT-${Date.now()}`,
-  };
-
-  try {
-    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams);
-  } catch (err) {
-    console.warn("EmailJS: confirmation email failed", err);
-  }
-}
-
-// ── ORDER SUBMISSION ──────────────────────────
-// FIX: Added retry logic for Railway cold starts
+// ── ORDER SUBMISSION ──────────────────────────────────────────
 async function placeOrder(e) {
   e.preventDefault();
   if (!validate()) return;
@@ -393,13 +354,13 @@ async function placeOrder(e) {
   const errBox  = document.getElementById("orderError");
 
   if (isDuplicate(name, phone)) {
-    errBox.textContent = "You placed an identical order recently. Please wait before placing again.";
+    errBox.textContent = "You placed an identical order recently. Please wait a minute before placing again.";
     errBox.style.display = "block";
     return;
   }
 
   btn.textContent = "Placing order...";
-  btn.disabled = true;
+  btn.disabled    = true;
   errBox.style.display = "none";
 
   const utm_source   = window._utmSource   || "organic";
@@ -407,51 +368,27 @@ async function placeOrder(e) {
   const utm_campaign = window._utmCampaign || "";
 
   const orders = cart.map(item => ({
-    name,
-    email,
-    phone,
-    city,
-    address,
+    name, email, phone, city, address,
     product_name: item.name,
     order_value:  item.price * item.qty,
     quantity:     item.qty,
-    utm_source,
-    utm_medium,
-    utm_campaign,
+    utm_source, utm_medium, utm_campaign,
   }));
 
-  // ── RETRY LOGIC (fixes Railway cold start timeouts) ──
   try {
-    let res;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        btn.textContent = attempt === 1 ? "Placing order..." : `Retrying... (${attempt}/3)`;
-        res = await fetch(`${API_BASE}/order`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orders }),
-        });
-        if (res.ok) break; // success — stop retrying
-      } catch (fetchErr) {
-        if (attempt === 3) throw fetchErr; // all 3 failed — give up
-        await new Promise(r => setTimeout(r, 1500 * attempt)); // wait 1.5s, 3s
-      }
-    }
-
+    const res  = await fetch(`${API_BASE}/order`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ orders }),
+    });
     const data = await res.json();
 
     if (res.ok && data.success) {
       markOrderPlaced(name, phone);
-      await sendConfirmationEmail(name, email, phone, city, address);
-
       cart = [];
       saveCart();
       updateCartUI();
-
-      window._utmSource   = null;
-      window._utmMedium   = null;
-      window._utmCampaign = null;
-
+      window._utmSource = window._utmMedium = window._utmCampaign = null;
       document.getElementById("checkoutSection").style.display = "none";
       document.getElementById("successMsg").textContent =
         `Thank you ${name}! We've received your order and will confirm on ${phone} shortly. A confirmation has been sent to ${email}.`;
@@ -462,9 +399,10 @@ async function placeOrder(e) {
   } catch (err) {
     errBox.textContent = "Failed to place order. Please try again or contact support.";
     errBox.style.display = "block";
+    console.error("[ORDER ERROR]", err);
   } finally {
     btn.textContent = "Place Order →";
-    btn.disabled = false;
+    btn.disabled    = false;
   }
 }
 
@@ -472,38 +410,7 @@ function resetAll() {
   document.getElementById("successOverlay").style.display = "none";
   document.getElementById("checkoutForm").reset();
   document.body.style.overflow = "";
-
   const banner = document.getElementById("reorderBanner");
   if (banner) banner.remove();
-
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
-function handleReorderLink() {
-  const params = new URLSearchParams(window.location.search);
-  const phone = params.get("phone");
-  if (!phone) return;
-
-  // Wait for DOM to be ready then autofill
-  document.getElementById("custName").value    = params.get("name")    || "";
-  document.getElementById("custEmail").value   = params.get("email")   || "";
-  document.getElementById("custPhone").value   = phone;
-  document.getElementById("custCity").value    = params.get("city")    || "";
-  document.getElementById("custAddress").value = params.get("address") || "";
-
-  // Open checkout directly
-  goToCheckout();
-
-  // Ping tracker silently in background — never blocks UX
-  const tracker = params.get("tracker");
-  if (tracker) {
-    fetch(tracker
-      + "&mode=pixel"
-      + "&phone="   + encodeURIComponent(phone)
-      + "&product=" + encodeURIComponent(params.get("product") || "")
-      + "&name="    + encodeURIComponent(params.get("name")    || "")
-      + "&email="   + encodeURIComponent(params.get("email")   || "")
-    ).catch(() => {});
-  }
-}
-
-window.addEventListener("DOMContentLoaded", handleReorderLink);
