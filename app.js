@@ -478,3 +478,32 @@ function resetAll() {
 
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+function handleReorderLink() {
+  const params = new URLSearchParams(window.location.search);
+  const phone = params.get("phone");
+  if (!phone) return;
+
+  // Wait for DOM to be ready then autofill
+  document.getElementById("custName").value    = params.get("name")    || "";
+  document.getElementById("custEmail").value   = params.get("email")   || "";
+  document.getElementById("custPhone").value   = phone;
+  document.getElementById("custCity").value    = params.get("city")    || "";
+  document.getElementById("custAddress").value = params.get("address") || "";
+
+  // Open checkout directly
+  goToCheckout();
+
+  // Ping tracker silently in background — never blocks UX
+  const tracker = params.get("tracker");
+  if (tracker) {
+    fetch(tracker
+      + "&mode=pixel"
+      + "&phone="   + encodeURIComponent(phone)
+      + "&product=" + encodeURIComponent(params.get("product") || "")
+      + "&name="    + encodeURIComponent(params.get("name")    || "")
+      + "&email="   + encodeURIComponent(params.get("email")   || "")
+    ).catch(() => {});
+  }
+}
+
+window.addEventListener("DOMContentLoaded", handleReorderLink);
